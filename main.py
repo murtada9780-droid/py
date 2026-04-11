@@ -39,3 +39,20 @@ async def track_visit(data: TrackData):
 @app.get("/")
 def home():
     return {"message": "Tracker is running!"}
+    
+@app.get("/api/tracker/logs")
+async def get_logs():
+    try:
+        conn = psycopg2.connect(DB_URL)
+        cur = conn.cursor()
+        # تأكد إن اسم الجدول visits وأسماء الأعمدة صحيحة عندك
+        cur.execute("SELECT id, gift_slug, created_at FROM visits ORDER BY created_at DESC")
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        
+        # نرجع البيانات على شكل قائمة عشان الـ map يشتغل
+        return [{"id": r[0], "giftId": r[1], "time": str(r[2])} for r in rows]
+    except Exception as e:
+        print(f"Error: {e}")
+        return [] # لو صار خطأ نرجع قائمة فارغة عشان ما تبيض الشاشة
