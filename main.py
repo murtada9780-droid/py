@@ -16,13 +16,15 @@ app.add_middleware(
 
 DB_URL = os.environ.get("DATABASE_URL")
 
-# دالة بناء الجدول مع الأعمدة الجديدة
 def init_db():
     try:
         conn = psycopg2.connect(DB_URL)
         cur = conn.cursor()
+        # هذي الحركة بديلة للـ Shell: تمسح القديم وتسوي الجديد
+        # ملاحظة: بعد أول تشغيل ناجح، تقدر تحذف سطر DROP TABLE لو تبي
+        cur.execute("DROP TABLE IF EXISTS visits;") 
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS visits (
+            CREATE TABLE visits (
                 id SERIAL PRIMARY KEY,
                 gift_slug TEXT NOT NULL,
                 ip_address TEXT,
@@ -34,20 +36,21 @@ def init_db():
         conn.commit()
         cur.close()
         conn.close()
+        print("✅ Database upgraded to Pro version.")
     except Exception as e:
-        print(f"DB Error: {e}")
+        print(f"❌ DB Error: {e}")
 
 init_db()
 
 @app.post("/api/tracker/track")
 async def track_visit(request: Request, item: dict):
     try:
-        # سحب الـ IP والـ User-Agent
         ip = request.headers.get("x-forwarded-for") or request.client.host
         ua_string = request.headers.get("user-agent")
         user_agent = parse(ua_string)
         
-        device = f"{user_agent.os.family} - {user_agent.device.family}"
+        # تحليل بيانات الجهاز والسيستم
+        device = f"{user_agent.os.family} ({user_agent.device.family})"
         browser = f"{user_agent.browser.family} {user_agent.browser.version_string}"
         
         conn = psycopg2.connect(DB_URL)
