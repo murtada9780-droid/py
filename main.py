@@ -15,7 +15,7 @@ app.add_middleware(
 )
 
 # رابط قاعدة البيانات (بنجيبه من ريندر بعد شوي)
-DB_URL = os.environ.get("postgresql://luvrapostgres_user:35Y9WNmgBiSfIClgeqzL4DomajTLI4z1@dpg-d6vm3qfdiees73d5mihg-a.oregon-postgres.render.com/luvrapostgres")
+DB_URL = os.environ.get("DATABASE_URL")
 
 class TrackData(BaseModel):
     giftId: str
