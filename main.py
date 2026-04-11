@@ -1,9 +1,9 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 import psycopg2
 import os
 from user_agents import parse
+import httpx
 
 app = FastAPI()
 
@@ -20,64 +20,88 @@ def init_db():
     try:
         conn = psycopg2.connect(DB_URL)
         cur = conn.cursor()
-        # هذي الحركة بديلة للـ Shell: تمسح القديم وتسوي الجديد
-        # ملاحظة: بعد أول تشغيل ناجح، تقدر تحذف سطر DROP TABLE لو تبي
-        cur.execute("DROP TABLE IF EXISTS visits;") 
+        cur.execute("DROP TABLE IF EXISTS visits CASCADE;") # مسح شامل للتحديث
         cur.execute("""
             CREATE TABLE visits (
                 id SERIAL PRIMARY KEY,
-                gift_slug TEXT NOT NULL,
-                ip_address TEXT,
-                device TEXT,
+                gift_slug TEXT,
+                ip TEXT,
+                location TEXT,
+                isp TEXT,
+                os_system TEXT,
+                device_model TEXT,
                 browser TEXT,
+                screen_res TEXT,
+                cores TEXT,
+                memory TEXT,
+                battery TEXT,
+                connection_type TEXT,
+                is_vpn BOOLEAN,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
         conn.commit()
         cur.close()
         conn.close()
-        print("✅ Database upgraded to Pro version.")
     except Exception as e:
-        print(f"❌ DB Error: {e}")
+        print(f"Init Error: {e}")
 
 init_db()
 
 @app.post("/api/tracker/track")
-async def track_visit(request: Request, item: dict):
+async def track_visit(request: Request, data: dict):
     try:
+        # 1. سحب الـ IP ومعلومات الشبكة
         ip = request.headers.get("x-forwarded-for") or request.client.host
-        ua_string = request.headers.get("user-agent")
-        user_agent = parse(ua_string)
+        if "," in ip: ip = ip.split(",")[0].strip()
         
-        # تحليل بيانات الجهاز والسيستم
-        device = f"{user_agent.os.family} ({user_agent.device.family})"
-        browser = f"{user_agent.browser.family} {user_agent.browser.version_string}"
-        
+        # 2. تحليل الموقع والـ VPN
+        geo_data = {"city": "Unknown", "country": "Unknown", "isp": "Unknown", "proxy": False}
+        try:
+            async with httpx.AsyncClient() as client:
+                res = await client.get(f"http://ip-api.com/json/{ip}?fields=status,message,country,city,isp,proxy")
+                if res.status_code == 200: geo_data = res.json()
+        except: pass
+
+        # 3. حفظ البيانات في القاعدة
         conn = psycopg2.connect(DB_URL)
         cur = conn.cursor()
-        cur.execute(
-            "INSERT INTO visits (gift_slug, ip_address, device, browser) VALUES (%s, %s, %s, %s)",
-            (item.get("giftId"), ip, device, browser)
-        )
+        cur.execute("""
+            INSERT INTO visits (
+                gift_slug, ip, location, isp, os_system, device_model, 
+                browser, screen_res, cores, memory, battery, connection_type, is_vpn
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (
+            data.get("giftId"),
+            ip,
+            f"{geo_data.get('city')}, {geo_data.get('country')}",
+            geo_data.get("isp"),
+            data.get("os"),
+            data.get("device"),
+            data.get("browser"),
+            data.get("screen"),
+            str(data.get("cores")),
+            str(data.get("ram")),
+            data.get("battery"),
+            data.get("connection"),
+            geo_data.get("proxy", False)
+        ))
         conn.commit()
         cur.close()
         conn.close()
         return {"status": "success"}
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        return {"status": "error", "msg": str(e)}
 
 @app.get("/api/tracker/logs")
 async def get_logs():
     try:
         conn = psycopg2.connect(DB_URL)
         cur = conn.cursor()
-        cur.execute("SELECT id, gift_slug, ip_address, device, browser, created_at FROM visits ORDER BY created_at DESC")
+        cur.execute("SELECT * FROM visits ORDER BY created_at DESC")
+        columns = [desc[0] for desc in cur.description]
         rows = cur.fetchall()
         cur.close()
         conn.close()
-        return [{
-            "id": r[0], "giftId": r[1], "ip": r[2], 
-            "device": r[3], "browser": r[4], "time": str(r[5])
-        } for r in rows]
-    except Exception as e:
-        return []
+        return [dict(zip(columns, r)) for r in rows]
+    except: return []
