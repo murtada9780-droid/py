@@ -51,12 +51,18 @@ init_db()
 @app.post("/api/tracker/track")
 async def track_visit(request: Request, data: dict):
     try:
-        # 1. سحب الـ IP ومعلومات الشبكة
-        ip = request.headers.get("x-forwarded-for") or request.client.host
-        if "," in ip: ip = ip.split(",")[0].strip()
+       ip = request.headers.get("x-forwarded-for") or request.client.host
+        ua_string = data.get("userAgent") # ناخذ الـ UserAgent الكامل من الفرونت
+        ua = parse(ua_string)
         
-        # 2. تحليل الموقع والـ VPN
-        geo_data = {"city": "Unknown", "country": "Unknown", "isp": "Unknown", "proxy": False}
+        # تحليل ذكي:
+        # لو كان ويندوز، بنعرف النسخة. لو كان آيفون، بنعرف الموديل.
+        system = f"{ua.os.family} {ua.os.version_string}"
+        device = ua.device.family
+        if ua.device.brand:
+            device = f"{ua.device.brand} {ua.device.model}"
+        
+        browser = f"{ua.browser.family} {ua.browser.version_string}"
         try:
             async with httpx.AsyncClient() as client:
                 res = await client.get(f"http://ip-api.com/json/{ip}?fields=status,message,country,city,isp,proxy")
