@@ -1,5 +1,5 @@
 fastapi
 uvicorn
 psycopg2-binary
-user-agents
-httpx
+pydantic
+requests
