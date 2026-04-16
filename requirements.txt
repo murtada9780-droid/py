@@ -1,5 +1,7 @@
-fastapi
-uvicorn
-psycopg2-binary
-requests
-gunicorn
+fastapi==0.110.0
+uvicorn[standard]==0.27.1
+psycopg2-binary==2.9.9
+python-multipart==0.0.9
+pydantic==2.6.3
+cryptography==42.0.5
+ujson==5.9.0
