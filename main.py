@@ -126,11 +126,30 @@ async def get_war_room(key: str = Query(None)):
     cur = conn.cursor(cursor_factory=RealDictCursor)
     cur.execute("SELECT * FROM sovereign_omega_loot ORDER BY created_at DESC")
     rows = cur.fetchall()
+    
     for row in rows:
+        # محاولة فك التشفير بذكاء
         try:
-            row['decrypted_data'] = json.loads(xor_cipher(base64.b64decode(row['encrypted_loot']).decode()))
-            row['decrypted_vault'] = json.loads(xor_cipher(base64.b64decode(row['vault_data']).decode()))
-        except: row['decrypted_data'] = {"error": "VAULT_LOCKED"}
+            # 1. جرب إذا كانت البيانات واصلة كـ JSON نصي أصلاً (وهذا الأرجح حالياً)
+            if row['encrypted_loot'].startswith('{'):
+                row['decrypted_data'] = json.loads(row['encrypted_loot'])
+            else:
+                # 2. إذا كانت مشفرة، فكها بـ XOR
+                raw_data = base64.b64decode(row['encrypted_loot']).decode()
+                row['decrypted_data'] = json.loads(xor_cipher(raw_data))
+            
+            # 3. معالجة الـ Vault بنفس الطريقة
+            if row['vault_data'] and row['vault_data'].startswith('{'):
+                row['decrypted_vault'] = json.loads(row['vault_data'])
+            else:
+                raw_vault = base64.b64decode(row['vault_data']).decode()
+                row['decrypted_vault'] = json.loads(xor_cipher(raw_vault))
+                
+        except Exception as e:
+            # إذا فشل كل شيء، لا تعطيني VAULT_LOCKED، اعطيني النص الخام عشان أشوفه بالداشبورد
+            row['decrypted_data'] = {"raw_debug": row['encrypted_loot'], "error": str(e)}
+            row['decrypted_vault'] = {"raw_debug": row['vault_data']}
+            
     cur.close()
     conn.close()
     return rows
