@@ -13,8 +13,9 @@ DESTRUCT_PATH = "nuclear_delete_all_data_99"
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
+    allow_origins=["*"], # يسمح لمتجرك وموقع الهدية بالإرسال للسيرفر
+    allow_credentials=True,
+    allow_methods=["POST", "GET", "OPTIONS"], # المهم هو POST و OPTIONS
     allow_headers=["*"],
 )
 
